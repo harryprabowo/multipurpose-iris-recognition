@@ -1,9 +1,15 @@
 import os
+from re import I
 import numpy as np
 import torch
 
 from basicsr.archs.edsr_arch import EDSR
 
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+import cv2
+import time
+from os import walk, path
+from datetime import datetime
 
 class SuperResolution:
     def __init__(self, model_path='\\core\\modules\\BasicSR\\experiments\\pretrained_models\\EDSR_Lx2_f256b32_DIV2K_official-be38e77d.pth'):
@@ -49,3 +55,75 @@ class SuperResolution:
         output = (output * 255.0).round().astype(np.uint8)
 
         return output
+
+def calc_metric(hr, sr):
+    sr = cv2.resize(sr, (hr.shape[1], hr.shape[0]))
+    psnr = peak_signal_noise_ratio(hr, sr)
+    ssim = structural_similarity(hr, sr, multichannel=True)
+    return psnr, ssim
+
+
+def evaluate(hr, module = SuperResolution(), img_name="test"):
+    scale_percent = 50  # percent of original size
+    width = int(hr.shape[1] * scale_percent / 100)
+    height = int(hr.shape[0] * scale_percent / 100)
+    dim = (width, height)
+
+    lr = cv2.resize(hr, dim)
+
+    start = time.time()    
+    sr = module.upscale(lr)
+    end = time.time()
+
+    cv2.imwrite('test\\upscale\\sr\\' + img_name + ".tiff", sr)
+
+    psnr, ssim = calc_metric(hr, sr)
+    
+    return psnr, ssim, end-start
+
+
+def main(dir):
+    module = SuperResolution()
+
+    root, _, filenames = next(walk(dir))
+    avg_psnr = 0
+    avg_ssim = 0
+    avg_exec_time = 0
+    i = 0
+
+    with open(os.path.join("test", "upscale", "log." + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".csv"), 'a+') as fp:
+        fp.write("Image,PSNR,SSIM,Exec Time\n")
+
+        for filename in filenames:
+            img, ext = path.splitext(filename)
+
+            if(ext not in ['.tiff', '.png', '.jpg']):
+                continue
+
+            try:
+                hr = cv2.imread(os.path.join(root, filename))
+
+                psnr, ssim, exec_time = evaluate(hr, module, img)
+                print(img, psnr, ssim, exec_time)
+                
+                fp.write('{},{},{},{}\n'.format(img, psnr, ssim, exec_time))
+
+                avg_psnr += psnr
+                avg_ssim += ssim
+                avg_exec_time += exec_time
+                i += 1
+            except Exception as e:
+                print(e)
+                continue
+
+            # break
+
+        avg_psnr /= i
+        avg_ssim /= i
+        avg_exec_time /= i
+
+        fp.write('Average,{},{},{}\n'.format(avg_psnr, avg_ssim, avg_exec_time))
+        fp.close()
+
+if __name__ == "__main__":
+    main("..\\datasets")

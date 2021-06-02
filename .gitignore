@@ -1,6 +1,7 @@
 datasets/
 segmented/
 masks/
+test/
 
 *.h5
 *.ph

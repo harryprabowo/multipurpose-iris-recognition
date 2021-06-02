@@ -10,7 +10,7 @@ iris = None
 
 def segment(img):
     segmentation = Segmentation()
-    img, bbox, anded, _ = segmentation.run(img)
+    img, bbox, anded, _, _ = segmentation.run(img)
     
     cv_image = img_as_ubyte(img)
     cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)

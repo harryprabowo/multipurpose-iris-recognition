@@ -1,12 +1,18 @@
 import os
 import numpy as np
 from skimage import color
+from skimage.io import imread, imsave, imshow
 
 import core.modules.IrisSeg.Model.utils as utils
 import core.modules.IrisSeg.Model.model as modellib
 from core.modules.IrisSeg.Model.config import Config
 
+from os import walk, path
+from datetime import datetime
+import time
+import cv2
 
+GROUND_TRUTH_DIR = os.path.join('core', 'modules', 'IrisSeg', 'IRISSEG-EP-Masks')
 class Segmentation:
     def __init__(self, weight_path="core\\modules\\IrisSeg\\Weights\\mask_rcnn_irises_Ubiris.h5"):
         # Root directory of the project
@@ -25,11 +31,11 @@ class Segmentation:
             NAME = "irises"
 
             GPU_COUNT = 1
-            IMAGES_PER_GPU = 2
+            IMAGES_PER_GPU = 1
 
             NUM_CLASSES = 1 + 1  # background + 3 shapes
 
-            IMAGE_MIN_DIM = 64
+            IMAGE_MIN_DIM = 640
             IMAGE_MAX_DIM = 640
 
             # Use a small epoch since the data is simple
@@ -90,4 +96,106 @@ class Segmentation:
         mask = r['masks'][:, :, 0]
         anded, _ = self.segment(img, bbox, mask)
 
-        return img, bbox, anded, r
+        return img, bbox, anded, r, mask
+
+
+def load_ground_truth(loc):
+    ground_truth = {}
+
+    root, _, filenames = next(walk(loc))
+
+    for filename in filenames:
+        img, ext = path.splitext(filename)
+
+        if(ext not in ['.tiff', '.png', '.jpg']):
+            continue
+        
+        img_name = img.split("_", 1)[1]
+
+        ground_truth[img_name] = imread(os.path.join(root, filename))
+
+    print("Ground truth loaded successfully")
+
+    return ground_truth
+
+
+def p2f(x):
+    return float(x.strip('%'))/100
+
+def evaluate(mask_true, iris, segmentation, img_name, img_dir):
+    start = time.time()    
+    _, _, anded, _, mask = segmentation.run(iris)
+    end = time.time()
+
+    mask = mask*255
+    mask = color.gray2rgb(mask)
+    mask = mask.astype(np.uint8)
+    mask = cv2.resize(mask, (mask_true.shape[1], mask_true.shape[0]))
+
+    anded = anded.astype(np.uint8)
+
+    cv2.imwrite('test\\segmentation\\masks\\' + img_name + ".tiff", mask)
+    cv2.imwrite('test\\upscale\\hr\\' + img_name + ".tiff", anded)
+
+    output = os.popen(
+        os.path.join(GROUND_TRUTH_DIR, "software", "bin", "maskcmpprf.exe") +
+        " -i test\\segmentation\\masks\\" + img_name + ".tiff" +
+        " -i " + os.path.join(GROUND_TRUTH_DIR, "masks", "ubiris", "OperatorA_" + img_name + ".tiff")
+    ).read()
+    
+    output = output.split()
+
+    return p2f(output[3]), p2f(output[5]), p2f(output[7]), end-start
+
+def main(dataset, ground_truth=GROUND_TRUTH_DIR):
+    segmentation = Segmentation()
+    ground_truth = load_ground_truth(os.path.join(ground_truth, "masks", "ubiris"))
+
+    root, _, filenames = next(walk(dataset))
+    avg_recall = 0
+    avg_prec = 0
+    avg_f1 = 0
+    avg_exec_time = 0
+    i = 0
+
+    with open(os.path.join("test", "segmentation", "log." + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".csv"), 'a+') as fp:
+        fp.write("Image,Recall,Precision,F1 Measure,Exec Time\n")
+
+        for filename in filenames:
+            img, ext = path.splitext(filename)
+
+            if(ext not in ['.tiff', '.png', '.jpg']):
+                continue
+
+            try:
+                mask_true = ground_truth[img]
+                iris = imread(os.path.join(root, filename))
+
+                recall, prec, f1, exec_time = evaluate(mask_true, iris, segmentation, img, root + filename)
+                print(img, recall, prec, f1, exec_time)
+
+                fp.write('{},{},{},{},{}\n'.format(
+                    img, recall, prec, f1, exec_time))
+
+                avg_recall += recall
+                avg_prec += prec
+                avg_f1 += f1
+                avg_exec_time += exec_time
+                i += 1
+            except Exception as e: 
+                print(e)
+                continue
+
+            # break
+
+        avg_recall /= i
+        avg_prec /= i
+        avg_f1 /= i
+        avg_exec_time /= i
+
+        fp.write('Average,{},{},{},{}\n'.format(avg_recall, avg_prec, avg_f1, avg_exec_time))
+
+        fp.close()
+
+if __name__ == "__main__":
+    main("..\\datasets")
